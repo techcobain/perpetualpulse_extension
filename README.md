@@ -50,6 +50,42 @@ Click either header to sort: highest first, then lowest first, then back to Ligh
 
 Funding history is cached locally for each site and only the missing hours are requested later, so totals appear immediately after the first load. The first funding sort has to load every market one request at a time (about 5 minutes on mainnet, with progress in the header). This shares Lighter's limit of 60 requests a minute.
 
+### Pro Depth (Lighter Only)
+
+On `app.lighter.xyz` and `robinhoodchain.lighter.xyz`, picking Lighter's own **Depth** view (Price tab, next to TradingView / Original) shows a **Pro** switch after it. Switched on, the depth chart shows who provides the book's liquidity for the market you're on (perps and spot). It starts off on every page load.
+
+- Resting depth is stacked by **owner** as step lines with no fill (the gap between two lines is that owner's depth), within ±0.1% to ±5% of mid, or any range up to ±100% typed into the box after ±5% (for thin books). The 7 largest owners with at least 2% of the depth in range get their own colour, stacked largest at the bottom; the rest stack as Others.
+- Styled after Lighter's depth chart: prices along the bottom, depth on the right axis, dashed grid.
+- Hover anywhere to see who is behind the stack up to that price: each owner's dollars and share, and the largest accounts inside it.
+- Owners come from `orderBookOrders`, which only returns the best 250 orders per side. Depth past them comes from the `order_book` socket and stacks on top as a dashed **Not attributed** line.
+- Click a legend entry to highlight that owner.
+- Orders are polled every 5 seconds, only while Pro is showing and the page is visible. This shares Lighter's limit of 60 requests a minute; on a 429 it waits a minute. The socket is opened only while Pro is showing.
+- Accounts without a label get their public name (pools such as LLP) and owner wallet from `/account`, one request every 6 seconds for the largest accounts in view. These are cached locally for good.
+
+#### Account labels
+
+Labels are yours: open **Labels** above the Pro chart to import, paste, export or clear them, or name a single account. They're stored in this browser's extension storage, separately for each Lighter site, and nothing is uploaded or included in this repo. Imports merge into what's stored.
+
+The file is a JSON object. Every field is optional and anything else is ignored. Replace each `<…>` with real values: account indexes as numbers (as strings when used as keys), wallets as `0x` addresses.
+
+```
+{
+  "accounts": {
+    "<main account index>": { "l1": "<wallet>", "type": 0, "master": <main account index> },
+    "<sub-account index>": { "l1": "<wallet>", "type": 1, "master": <main account index> },
+    "<another account index>": { "name": "My desk" }
+  },
+  "l1": {
+    "<wallet>": { "name": "Market Maker A", "x": "@handle", "telegram": "@handle", "discord": "handle", "description": "Free text", "apiTrader": true }
+  }
+}
+```
+
+- `accounts`: account index → owner wallet (`l1`), `type` (0 main, 1 sub-account, 2 public pool, 3+ system), `master` account index, and an optional `name` that overrides everything else.
+- `l1`: owner wallet → `name` and socials. Every account with that wallet takes the name.
+
+An owner is every account that shares a name (any case), otherwise every account that shares a wallet, so sub-accounts stack with their main account; pools and system accounts stay separate. Hover shows the accounts inside each owner.
+
 ### Risk Metrics (Lighter Only)
 - **Value at Risk (VaR)** — max expected loss over 24H at 95% confidence
 - **Net Beta** — weighted portfolio beta relative to BTC
@@ -98,6 +134,7 @@ platform.js          — Platform detection & selector abstraction (text-based, 
 content.js           — Lighter: metrics, funding (WS+REST), risk, TV equation
 hotkeys.js           — Lighter: keyboard shortcuts
 market-columns.js    — Lighter: sortable spread and 7D funding columns in the market selector
+pro-depth.js         — Lighter: Pro switch on the Depth view, book depth stacked by owner, with local account labels
 trade-history.js     — Lighter mainnet: trade history sync for the dashboard
 page-bridge.js       — Lighter: runs in the page, holds auth tokens and makes authenticated API calls
 hl-content.js        — Hyperliquid: metrics, funding (3-dex REST), UI tweaks, TV equation
