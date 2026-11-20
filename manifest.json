@@ -30,7 +30,8 @@
         "trade-history.js",
         "content.js",
         "hotkeys.js",
-        "market-columns.js"
+        "market-columns.js",
+        "pro-depth.js"
       ],
       "run_at": "document_start"
     },
