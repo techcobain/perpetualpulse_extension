@@ -54,7 +54,8 @@ Funding history is cached locally for each site and only the missing hours are r
 
 On `app.lighter.xyz` and `robinhoodchain.lighter.xyz`, picking Lighter's own **Depth** view (Price tab, next to TradingView / Original) shows a **Pro** switch after it. Switched on, the depth chart shows who provides the book's liquidity for the market you're on (perps and spot). It starts off on every page load.
 
-- Resting depth is stacked by **owner** as step lines with no fill (the gap between two lines is that owner's depth), within ±0.1% to ±5% of mid, or any range up to ±100% typed into the box after ±5% (for thin books). The 7 largest owners with at least 2% of the depth in range get their own colour, stacked largest at the bottom; the rest stack as Others.
+- Resting depth is stacked by **owner** as step lines with no fill (the gap between two lines is that owner's depth), within ±0.1% to ±5% of mid, or any range up to ±100% typed into the box at the end (for thin books). The 7 largest owners with at least 2% of the depth in range get their own colour, stacked largest at the bottom; the rest stack as Others.
+- **Attributed** sizes the range to where the best 250 orders per side end, so everything shown has an owner: each side out to its own last order (uneven around mid). **Attributed ±** uses the nearer side's for both. Both follow the book on every refresh; hover either for the current %.
 - Styled after Lighter's depth chart: prices along the bottom, depth on the right axis, dashed grid.
 - Hover anywhere to see who is behind the stack up to that price: each owner's dollars and share, and the largest accounts inside it.
 - Owners come from `orderBookOrders`, which only returns the best 250 orders per side. Depth past them comes from the `order_book` socket and stacks on top as a dashed **Not attributed** line.

@@ -30,6 +30,11 @@
     const RANGES = [0.1, 0.25, 0.5, 1, 2, 5];
     const MAX_RANGE = 100; // thin books can need far more than the presets
 
+    // "fixed": a preset or typed range, the same on both sides. The "visible" modes follow the
+    // book: each side reaches its last known order ("visibleSides"), or both sides reach the
+    // nearer of the two ("visibleMin"). They change with every refresh.
+    const RANGE_MODES = ["fixed", "visibleSides", "visibleMin"];
+
     function validRange(v) {
         return typeof v === "number" && v > 0 && v <= MAX_RANGE;
     }
@@ -60,7 +65,7 @@
         rateLimited: false,
         fetching: false,
         nextPollAt: 0,
-        prefs: { range: 0.5 },
+        prefs: { range: 0.5, rangeMode: "fixed" },
         focus: null,
         slots: new Map(), // group key -> palette slot
         labels: { accounts: {}, l1: {} },
@@ -97,6 +102,7 @@
         state.pub = d[PUBLIC_KEY] || {};
         const prefs = d[PREFS_KEY] || {};
         if (validRange(prefs.range)) state.prefs.range = prefs.range;
+        if (RANGE_MODES.includes(prefs.rangeMode)) state.prefs.rangeMode = prefs.rangeMode;
         refresh();
     });
 
@@ -452,10 +458,31 @@
         return next;
     }
 
+    /** How far from mid (in %, positive) each side's known orders reach, or null with no orders. */
+    function visibleEdges(snap) {
+        const edge = (orders) => (orders.length ? Math.abs(orders.at(-1).pct) : null);
+        let bid = edge(snap.bids), ask = edge(snap.asks);
+        bid ??= ask;
+        ask ??= bid;
+        return bid > 0 && ask > 0 ? { bid, ask } : null;
+    }
+
+    /** The chart's extent on each side of mid, in % (positive). */
+    function resolveRange(snap) {
+        const fixed = { bid: state.prefs.range, ask: state.prefs.range };
+        const edges = state.prefs.rangeMode === "fixed" ? null : visibleEdges(snap);
+        if (!edges) return fixed;
+        if (state.prefs.rangeMode === "visibleMin") {
+            const nearer = Math.min(edges.bid, edges.ask);
+            return { bid: nearer, ask: nearer };
+        }
+        return edges;
+    }
+
     function buildModel() {
         const snap = state.snap;
         if (!snap || !(snap.mid > 0)) return null;
-        const maxPct = state.prefs.range;
+        const { bid: bidPct, ask: askPct } = resolveRange(snap);
         const palette = PALETTE[theme()];
 
         // Resting USD per account within range
@@ -466,11 +493,11 @@
             return r;
         };
         for (const o of snap.bids) {
-            if (o.pct < -maxPct) break;
+            if (o.pct < -bidPct) break;
             rowOf(o.acct).bid += o.usd;
         }
         for (const o of snap.asks) {
-            if (o.pct > maxPct) break;
+            if (o.pct > askPct) break;
             rowOf(o.acct).ask += o.usd;
         }
 
@@ -501,7 +528,7 @@
             ask: snap.truncated.asks && snap.asks.length ? snap.asks.at(-1).pct : null,
         };
         const fullBook = snap.total !== null;
-        const reachInRange = (reach.bid !== null && reach.bid > -maxPct) || (reach.ask !== null && reach.ask < maxPct);
+        const reachInRange = (reach.bid !== null && reach.bid > -bidPct) || (reach.ask !== null && reach.ask < askPct);
         // Largest owner at the bottom of the stack; colours stay with their owner across refreshes
         const slotLayers = [...state.slots.entries()]
             .map(([key, slot]) => ({ key, layer: `L${slot}`, slot }))
@@ -522,11 +549,11 @@
         });
 
         // Price points: every order and book level in range, plus the edges and mid
-        const xs = new Set([-maxPct, 0, maxPct]);
-        for (const o of snap.bids) if (o.pct >= -maxPct) xs.add(o.pct);
-        for (const o of snap.asks) if (o.pct <= maxPct) xs.add(o.pct);
-        for (const l of snap.total?.bids || []) if (l.pct >= -maxPct) xs.add(l.pct);
-        for (const l of snap.total?.asks || []) if (l.pct <= maxPct) xs.add(l.pct);
+        const xs = new Set([-bidPct, 0, askPct]);
+        for (const o of snap.bids) if (o.pct >= -bidPct) xs.add(o.pct);
+        for (const o of snap.asks) if (o.pct <= askPct) xs.add(o.pct);
+        for (const l of snap.total?.bids || []) if (l.pct >= -bidPct) xs.add(l.pct);
+        for (const l of snap.total?.asks || []) if (l.pct <= askPct) xs.add(l.pct);
         const sorted = [...xs].sort((a, b) => a - b);
         let peak = 0;
         const eps = 1e-12;
@@ -587,7 +614,7 @@
         ];
 
         return {
-            maxPct, keys, layers, groups, groupOfAcct, layerOfAcct, bidPts, askPts,
+            bidPct, askPct, span: bidPct + askPct, keys, layers, groups, groupOfAcct, layerOfAcct, bidPts, askPts,
             maxY: peak * 1.05 || 1, totals, reach, fullBook, lookupCandidates,
             bidReached, askReached,
         };
@@ -603,6 +630,15 @@
     function formatPct(value, decimals) {
         const text = `${Math.abs(value).toFixed(decimals)}%`;
         return value < 0 && Number(text.slice(0, -1)) !== 0 ? `−${text}` : text;
+    }
+
+    /** Compact % for range labels: 0.042, 0.42, 4.2, 42. */
+    function shortPct(value) {
+        return value < 0.1 ? value.toFixed(3) : value < 10 ? value.toFixed(2) : value.toFixed(1);
+    }
+
+    function rangeText(bidPct, askPct) {
+        return bidPct === askPct ? `±${shortPct(bidPct)}%` : `−${shortPct(bidPct)}% / +${shortPct(askPct)}%`;
     }
 
     function formatPrice(value) {
@@ -801,6 +837,8 @@
         rangeInput.addEventListener("blur", applyCustom);
         const rangeSeg = el("div", { class: "pp-dt-controls" }, [
             ...RANGES.map((r) => el("button", { class: "pp-dt-btn", "data-range": String(r), text: `±${r}%`, onclick: () => setRange(r) })),
+            el("button", { class: "pp-dt-btn", "data-mode": "visibleSides", text: "Attributed", onclick: () => setRangeMode("visibleSides") }),
+            el("button", { class: "pp-dt-btn", "data-mode": "visibleMin", text: "Attributed ±", onclick: () => setRangeMode("visibleMin") }),
             rangeInput,
         ]);
         const labelsBtn = el("button", { class: "pp-dt-btn", text: "Labels", onclick: () => toggleLabelsPanel() });
@@ -826,7 +864,7 @@
                 hideTip();
                 return;
             }
-            state.hoverX = ((px - left) / width) * 2 * model.maxPct - model.maxPct;
+            state.hoverX = ((px - left) / width) * model.span - model.bidPct;
             renderTip(e.clientX - rect.left, e.clientY - rect.top);
         });
         chart.addEventListener("mouseleave", hideTip);
@@ -843,8 +881,17 @@
     }
 
     function setRange(value) {
-        if (state.prefs.range === value) return;
+        if (state.prefs.rangeMode === "fixed" && state.prefs.range === value) return;
         state.prefs.range = value;
+        state.prefs.rangeMode = "fixed";
+        savePrefs();
+        refresh();
+    }
+
+    function setRangeMode(mode) {
+        if (state.prefs.rangeMode === mode) return;
+        state.prefs.rangeMode = mode;
+        state.focus = null;
         savePrefs();
         refresh();
     }
@@ -873,9 +920,24 @@
 
     function renderHeader() {
         const model = state.model;
-        for (const b of ui.rangeSeg.querySelectorAll("button")) b.setAttribute("aria-pressed", String(Number(b.dataset.range) === state.prefs.range));
+        const mode = state.prefs.rangeMode;
+        const fixed = mode === "fixed";
+        // The Attributed buttons' hover text says where the known orders end right now
+        const edges = state.snap ? visibleEdges(state.snap) : null;
+        const nearer = edges && Math.min(edges.bid, edges.ask);
+        const now = (text) => (edges ? ` Now ${text}.` : "");
+        for (const b of ui.rangeSeg.querySelectorAll("button")) {
+            const on = b.dataset.mode ? b.dataset.mode === mode : fixed && Number(b.dataset.range) === state.prefs.range;
+            b.setAttribute("aria-pressed", String(on));
+            if (b.dataset.mode === "visibleSides") {
+                b.title = `Each side out to its last known order (the best ${ORDER_LIMIT} per side), so every order shown has an owner.${now(edges && rangeText(edges.bid, edges.ask))}`;
+            }
+            if (b.dataset.mode === "visibleMin") {
+                b.title = `Both sides out to the nearer side's last known order, so every order shown has an owner.${now(edges && rangeText(nearer, nearer))}`;
+            }
+        }
         // The box shows a custom range while it's the one in use
-        const custom = !RANGES.includes(state.prefs.range);
+        const custom = fixed && !RANGES.includes(state.prefs.range);
         if (document.activeElement !== ui.rangeInput) ui.rangeInput.value = custom ? `±${state.prefs.range}%` : "";
         ui.rangeInput.classList.toggle("pp-on", custom);
         ui.labelsBtn.setAttribute("aria-pressed", String(ui.pop.style.display !== "none"));
@@ -904,13 +966,13 @@
         if (state.rateLimited) note("Lighter is rate limiting this browser; retrying in a minute.", true);
         else if (state.error) note(`Couldn't load orders: ${state.error}. Retrying.`, true);
         if (model) {
-            const reachBid = model.reach.bid !== null && model.reach.bid > -model.maxPct ? model.reach.bid : null;
-            const reachAsk = model.reach.ask !== null && model.reach.ask < model.maxPct ? model.reach.ask : null;
+            const reachBid = model.reach.bid !== null && model.reach.bid > -model.bidPct ? model.reach.bid : null;
+            const reachAsk = model.reach.ask !== null && model.reach.ask < model.askPct ? model.reach.ask : null;
             if (reachBid !== null || reachAsk !== null) {
                 const where = [reachBid !== null && `bids to ${formatPct(reachBid, 3)}`, reachAsk !== null && `asks to ${formatPct(reachAsk, 3)}`].filter(Boolean).join(", ");
                 const all = model.totals.bids + model.totals.asks;
                 note(model.fullBook
-                    ? `Owners are only known for the best ${ORDER_LIMIT} orders per side (${where}). Deeper depth is Not attributed: ${all ? ((model.totals.unattributed / all) * 100).toFixed(0) : 0}% of depth within ±${model.maxPct}%.`
+                    ? `Owners are only known for the best ${ORDER_LIMIT} orders per side (${where}). Deeper depth is Not attributed: ${all ? ((model.totals.unattributed / all) * 100).toFixed(0) : 0}% of depth within ${rangeText(model.bidPct, model.askPct)}.`
                     : `Owners are only known for the best ${ORDER_LIMIT} orders per side (${where}); depth past them is still loading.`);
             }
         }
@@ -933,7 +995,7 @@
         const m = { left: 8, right: 62, top: 12, bottom: 24 };
         const width = W - m.left - m.right, height = H - m.top - m.bottom;
         ui.geom = { left: m.left, top: m.top, width, height };
-        const X = (x) => m.left + ((x + model.maxPct) / (2 * model.maxPct)) * width;
+        const X = (x) => m.left + ((x + model.bidPct) / model.span) * width;
         const Y = (v) => m.top + height - (v / model.maxY) * height;
         const fmt = (n) => n.toFixed(1);
 
@@ -955,8 +1017,8 @@
 
         // Price axis: the range's edge prices at the ends, round prices between
         const mid = state.snap.mid;
-        const lowPrice = Math.max(0, mid * (1 - model.maxPct / 100));
-        const highPrice = mid * (1 + model.maxPct / 100);
+        const lowPrice = Math.max(0, mid * (1 - model.bidPct / 100));
+        const highPrice = mid * (1 + model.askPct / 100);
         const XP = (price) => X((price / mid - 1) * 100);
         const priceStep = niceStep(highPrice - lowPrice, Math.max(2, Math.floor(width / 110)));
         const first = Math.ceil(lowPrice / priceStep);
@@ -999,7 +1061,7 @@
 
         // Where the known orders run out
         for (const reach of [model.reach.bid, model.reach.ask]) {
-            if (reach === null || Math.abs(reach) >= model.maxPct) continue;
+            if (reach === null || reach <= -model.bidPct || reach >= model.askPct) continue;
             svg.append(svgEl("line", { x1: fmt(X(reach)), x2: fmt(X(reach)), y1: m.top, y2: m.top + height, stroke: "var(--color-warn, #f5b83d)", "stroke-dasharray": "2 4" }));
         }
     }
@@ -1043,10 +1105,10 @@
             return;
         }
         const { left, top, width, height } = ui.geom;
-        const cx = left + ((x + model.maxPct) / (2 * model.maxPct)) * width;
+        const cx = left + ((x + model.bidPct) / model.span) * width;
         ui.svg.append(svgEl("line", { class: "pp-cross", x1: cx.toFixed(1), x2: cx.toFixed(1), y1: top, y2: top + height, stroke: "var(--color-meta, #8a8f98)", "stroke-opacity": 0.6, "stroke-dasharray": "3 3" }));
 
-        const decimals = model.maxPct < 0.05 ? 4 : model.maxPct < 0.5 ? 3 : 2;
+        const decimals = model.span < 0.1 ? 4 : model.span < 1 ? 3 : 2;
         const price = state.snap.mid * (1 + x / 100);
         const total = stack.point.top;
         const rows = model.keys
